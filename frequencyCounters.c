@@ -87,7 +87,7 @@ int main(void)
     P1OUT |= BIT3;                          // Configure P1.3 as pulled-up
     //P1REN |= BIT3;                          // P1.3 pull-up register enable
     P1IES |= BIT3;                          // P1.3 Hi/Low edge
-    P1IE |= BIT3;                           // P1.3 interrupt enabled
+    //P1IE |= BIT3;                           // P1.3 interrupt enabled
 
     P1SEL1 |= BIT1;                                 // Set as ACLK pin, second function
     P1DIR |= BIT1;
@@ -96,20 +96,11 @@ int main(void)
         // previously configured port settings
     PM5CTL0 &= ~LOCKLPM5;
 
-        // Timer0_B3 Setup
-    TB0CCTL0 |= CM_1 | CCIS_1 | CCIE | CAP | SCS;
-                                                        // Capture rising edge,
-                                                        // Use CCI0B=ACLK,
-                                                        // Synchronous capture,
-                                                        // Enable capture mode,
-                                                        // Enable capture interrupt
-
-    TB0CTL |= TBSSEL_2 | MC_2 | TBCLR;              // Use SMCLK as clock source, clear TB0R
-    // Start timer in continuous mode
-
-    // Disable the GPIO power-on default high-impedance mode
-    // to activate previously configured port settings
     
+    TB0CCTL0 |= CCIE;                             // TBCCR0 interrupt enabled
+    TB0CCR0 = 5000;
+    TB0CTL = TBSSEL__SMCLK | MC__UP;             // SMCLK, UP mode
+
     P1IFG &= ~BIT3;                         // P1.3 IFG cleared
     
     while(1)
@@ -136,25 +127,16 @@ void __attribute__ ((interrupt(PORT1_VECTOR))) Port_1 (void)
 }
 
 
+// Timer0_B0 interrupt service routine
 #if defined(__TI_COMPILER_VERSION__) || defined(__IAR_SYSTEMS_ICC__)
 #pragma vector = TIMER0_B0_VECTOR
-__interrupt void TIMER0_B0_ISR(void)
+__interrupt void Timer0_B0_ISR (void)
 #elif defined(__GNUC__)
-void __attribute__ ((interrupt(TIMER0_B0_VECTOR))) TIMER0_B0_ISR (void)
+void __attribute__ ((interrupt(TIMER0_B0_VECTOR))) Timer0_B0_ISR (void)
 #else
 #error Compiler not supported!
 #endif
 {
-    TB0CCTL0 &= ~CCIFG;
-    timerBcaptureValues = TB0CCR0;
-    if (timerBcaptureValues >= 20)
-    {
-        while (1)
-        {
-            P1IE |= BIT3;
-        }
-    }
-
-
+    P1IE |= BIT3;
+    captureValues=0;
 }
-
