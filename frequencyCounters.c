@@ -43,71 +43,81 @@
  *
  * --/COPYRIGHT--*/
 //******************************************************************************
-//  MSP430FR231x Demo - Software Port Interrupt Service on P1.3 from LPM3
+//  MSP430FR231x Demo - Configure MCLK for 16MHz operation, and REFO sourcing
+//                                     FLLREF and ACLK. 
 //
-//  Description: A Hi/Lo transition on P1.3 will trigger P1ISR the first time.
-//  On hitting the P1ISR, device exits LPM3 mode and executes section of code in
-//  main() which includes toggling an LED.
+//  Description: Configure MCLK for 16MHz. FLL reference clock is REFO. At this 
+//                    speed, the FRAM requires wait states. 
+//                    ACLK = default REFO ~32768Hz, SMCLK = MCLK = 16MHz. 
+//                    Toggle LED to indicate that the program is running.
 //
-//  ACLK = default REFO ~32768Hz, MCLK = SMCLK = default DCODIV ~1MHz.
+//           MSP430FR2311
+//         ---------------
+//     /|\|               |
+//      | |               |
+//      --|RST            |
+//        |          P1.2 |---> LED
+//        |               |
+//        |          P1.0 |---> SMCLK = 16MHz
+//        |          P1.1 |---> ACLK  = 32768Hz
 //
-//
-//              MSP430FR2311
-//            ---------------
-//        /|\|               |
-//         | |               |
-//         --|RST            |
-//     /|\   |               |
-//      --o--|P1.3       P1.0|-->LED
-//     \|/   |               |
-//           |               |
 //
 //   Darren Lu
 //   Texas Instruments Inc.
 //   July 2015
 //   Built with IAR Embedded Workbench v6.30 & Code Composer Studio v6.1 
 //******************************************************************************
-
 #include <msp430.h>
-
 volatile unsigned int captureValues;
 unsigned int timerBcaptureValues;
 
 int main(void)
 {
-    WDTCTL = WDTPW | WDTHOLD;               // Stop watchdog timer
+    WDTCTL = WDTPW | WDTHOLD;                          // Stop watchdog timer
 
-    //convert to 16MHZ clock
-    CSCTL1 |= 0b1010;
+    // Configure one FRAM waitstate as required by the device datasheet for MCLK
+    // operation beyond 8MHz _before_ configuring the clock system.
+    FRCTL0 = FRCTLPW | NWAITS_1;
 
-    // Configure GPIO
-    P1OUT &= ~BIT0;                         // Clear P1.0 output latch for a defined power-on state
-    P1DIR |= BIT0;                          // Set P1.0 to output direction
+    __bis_SR_register(SCG0);                           // disable FLL
+    CSCTL3 |= SELREF__REFOCLK;                         // Set REFO as FLL reference source
+    CSCTL0 = 0;                                        // clear DCO and MOD registers
+    CSCTL1 &= ~(DCORSEL_7);                            // Clear DCO frequency select bits first
+    CSCTL1 |= DCORSEL_5;                               // Set DCO = 16MHz
+    CSCTL2 = FLLD_0 + 487;                             // DCOCLKDIV = 16MHz
+    __delay_cycles(3);  
+    __bic_SR_register(SCG0);                           // enable FLL
+    while(CSCTL7 & (FLLUNLOCK0 | FLLUNLOCK1));         // FLL locked
+    
+    CSCTL4 = SELMS__DCOCLKDIV | SELA__REFOCLK;        // set default REFO(~32768Hz) as ACLK source, ACLK = 32768Hz
+                                                       // default DCOCLKDIV as MCLK and SMCLK source
+
+    P1DIR |= BIT0 | BIT1 | BIT2;                       // set ACLK SMCLK and LED pin as output
+    P1SEL1 |= BIT0 | BIT1;                             // set ACLK and  SMCLK pin as second function
+
+    //PM5CTL0 &= ~LOCKLPM5;                              // Disable the GPIO power-on default high-impedance mode
+                                                       // to activate previously configured port settings
+
+    P2OUT &= ~BIT0;                         // Clear P1.0 output latch for a defined power-on state
+    P2DIR |= BIT0;
+
+    TB0CCTL0 |= CCIE;                             // TBCCR0 interrupt enabled
+    TB0CCR0 = 0x8FFF;
+    TB0CTL = TBSSEL__SMCLK | MC__UP;             // SMCLK, UP mode
     P1DIR &= ~BIT3;
     P1OUT |= BIT3;                          // Configure P1.3 as pulled-up
-    //P1REN |= BIT3;                          // P1.3 pull-up register enable
+           //P1REN |= BIT3;                          // P1.3 pull-up register enable
     P1IES |= BIT3;                          // P1.3 Hi/Low edge
-    //P1IE |= BIT3;                           // P1.3 interrupt enabled
+           //P1IE |= BIT3;                           // P1.3 interrupt enabled
 
-    P1SEL1 |= BIT1;                                 // Set as ACLK pin, second function
-    P1DIR |= BIT1;
-
-        // Disable the GPIO power-on default high-impedance mode to activate
-        // previously configured port settings
-    PM5CTL0 &= ~LOCKLPM5;
-
-    
-    TB0CCTL0 |= CCIE;                             // TBCCR0 interrupt enabled
-    TB0CCR0 = 5000;
-    TB0CTL = TBSSEL__SMCLK | MC__UP;             // SMCLK, UP mode
-
-    P1IFG &= ~BIT3;                         // P1.3 IFG cleared
-    
+        P1IFG &= ~BIT3;
+        PM5CTL0 &= ~LOCKLPM5;
     while(1)
     {
         __bis_SR_register(LPM3_bits | GIE); // Enter LPM3 w/interrupt
-        __no_operation();                   // For debug
-        P1OUT ^= BIT0;                      // P1.0 = toggle
+        __no_operation();
+        //P2OUT ^= BIT0;                                 // Toggle P2.0 using exclusive-OR
+        //__delay_cycles(8000000);                       // Delay for 8000000*(1/MCLK)=0.5s
     }
 }
 
@@ -123,7 +133,7 @@ void __attribute__ ((interrupt(PORT1_VECTOR))) Port_1 (void)
 {
     P1IFG &= ~BIT3;                         // Clear P1.3 IFG
     captureValues++;
-    __bic_SR_register_on_exit(LPM3_bits);   // Exit LPM3
+    //__bic_SR_register_on_exit(LPM3_bits);   // Exit LPM3
 }
 
 
